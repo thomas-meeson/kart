@@ -54,21 +54,15 @@ A side-by-side hit-rate counter: your model vs the standard rule.
 The spike story: with EIE, find 2–3 dramatic real events in the data. For each, show its views curve with markers for when each method cached it.
 Pitch deck and narrative: problem (one sentence), the question, the headline numbers, the spike story, the “what is foresight worth?” curve, honest limits.
 Build against fake demo.json tonight, so you aren’t blocked waiting for real results.
-Timeline (assumes judging around 14:00; adjust to the real deadline)
-Time	Computing	Physics	EIE	Design Eng
-01:00–01:30	All: agree interfaces, metric, cache sizes			
-01:30–03:00	Backtest harness + baselines on fake data	Read up on attention decay; write the fitting code	Downloader; first 2 days of data	Demo wireframe, fake JSON
-03:00–06:00	XGBoost on real data	Fit decay model to real spikes	Full download running; data checks	Demo built against fake data
-06:00–09:00	Sleep in shifts (2–3 hours each). Transformer trains on Colab	Sleep, then the switching-cost optimisation	Sleep, then the replay API	Sleep, then find showcase spikes
-09:00–12:00	Final results: hit-rate curves, foresight curve	Confidence intervals; plug decay model into the backtest	Wire real data into the demo	Deck; real numbers in
-12:00–judging	All: freeze code, rehearse the 3-minute pitch three times			
+
+<img width="1108" height="790" alt="image" src="https://github.com/user-attachments/assets/6d04a586-a1cb-4bf0-98e5-363f8b33d182" />
+
+
 Honest limits to put in the pitch
 Pages that go from nothing to a million views within one hour can’t be predicted from hourly data. Everyone catches them an hour late. Showing exactly where that limit is will impress the judges more than hiding it.
 Hourly decisions simplify real caches, which decide per request.
 Article sizes aren’t in this data, so every page counts as the same size.
 Stretch goal: Wikimedia has also released anonymised request traces from its caching servers for research. If you find them on Wikitech, they’d let you test per request.
-
-Want me to build the starter repo now: the streaming downloader, the backtest harness, the three baselines and a fake demo.json? That would unblock all four of you within the hour.
 
 Sources:
 
