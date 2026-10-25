@@ -1,85 +1,76 @@
-# Smart Basket — where and when to buy your shopping
+PASTE INTO LLM
+take tasks from timeline at bottom, one at a time. tackle bit by bit
 
-**Pitch in one line:** give it your shopping list and the shops near you, and it tells you which shop to buy each item at and whether to buy now or wait for a predicted price drop, backed by a backtest on real UK supermarket prices.
 
-**Why it fits HRT's theme:** we predict prices (a transformer over 5 retailers' daily price histories), turn predictions into decisions (a mixed-integer program re-solved daily, like an execution algorithm), and measure the decision honestly. Our purchases don't move supermarket prices, so the backtest is a true out-of-sample test, including "transaction costs" (travel).
+Here’s the plan. One honest flag first: I couldn’t confirm the size of Wikimedia’s hourly pageview files from here. They’re big, and downloading all-language files for many days could be tens of GB on hackathon wifi. So the data download starts first, small (2 days), and grows overnight.
 
----
+Project: “Ahead of the Spike”
 
-## Quick start (synthetic data, ~5 minutes, no download needed)
+The question: every Wikipedia page view is served either from fast memory (a cache) or slowly from the main servers. If a cache can hold only the top N articles each hour, can we predict what people will read next hour well enough to beat the standard caching rules?
 
-```bash
-pip install -r requirements.txt
-python -m basket.make_synthetic --out data/synthetic_raw
-python -m basket.load_data --input "data/synthetic_raw/*.csv" --out data/processed_syn
-python -m basket.features --data data/processed_syn
-python -m basket.matching propose --data data/processed_syn --staples data/staples_synthetic.csv
-python -m basket.model_xgb --data data/processed_syn --refit-every 45 --n-estimators 200
-python -m basket.model_transformer --data data/processed_syn --steps 1500
-python -m basket.backtest --data data/processed_syn --staples data/staples_synthetic.csv \
-    --preds xgb=preds_xgb.parquet --preds transformer=preds_transformer.parquet
-python -m basket.recommend --data data/processed_syn --staples data/staples_synthetic.csv \
-    --preds preds_xgb.parquet --items milk_semi_4pt,heinz_beans_415g --visit Tesco=1,Aldi=3 --home Tesco
-python -m basket.analysis --data data/processed_syn --staples data/staples_synthetic.csv
-```
+Headline results to aim for:
 
-Synthetic numbers mean nothing. They only prove the pipeline runs.
+Hit rate: the share of next hour’s views served from the cache, for your model against the standard rules, across cache sizes.
+Spike catch time: when a page suddenly goes viral (a death, a match, breaking news), how many hours earlier you had it cached than the standard rules.
+The time-theme slide, “what is foresight worth?”: if a cache needs k hours’ notice to warm up, how does hit rate fall as k goes from 1 to 6?
 
-## Real data
+The cache doesn’t change what people read, so the backtest on historical data is exact. Simplification to state upfront: decisions are made once per hour, not per request.
 
-1. Download **"Time Series UK Supermarket Data"** (Declan McAlinden) from Kaggle into `data/raw/`. Daily prices for Aldi, ASDA, Morrisons, Tesco and Sainsbury's from 9 Jan 2024. Check the last date in the files.
-   Backup: the Hugging Face mirror `Rif-SQL/time-series-uk-retail-supermarket-price-data` (one parquet, Apache-2.0), but its preview only covers Jan–Apr 2024.
-2. See what categories exist, then load a subset (the full dataset is ~100k rows per day; a laptop wants ~5–20k products):
-   ```bash
-   python -m basket.load_data --input "data/raw/*.csv" --list-categories
-   python -m basket.load_data --input "data/raw/*.csv" --out data/processed --categories <a few categories> --min-coverage 0.7
-   ```
-   If the loader says it can't find a column, add the header to `COLUMN_ALIASES` in `load_data.py`.
-3. `python -m basket.features --data data/processed` prints how often each retailer runs promotions. **Sanity-check this first.**
-4. Copy `data/staples_example.csv` to `data/staples.csv`, run `matching propose`, then **hand-check `match_candidates.csv`** (set `selected` = 1 on the correct product per item and retailer). This is the most important manual step: wrong matches = wrong answers.
-5. Models: `model_xgb` (use `--train-stride 3` if slow), then `model_transformer` (use a GPU/Colab for the real data; same command).
-6. `backtest`, `analysis`, `recommend` as above.
+Shared interfaces (agree these in the first 30 minutes)
+views.parquet: columns hour, page, views (English Wikipedia, desktop and mobile combined). EIE produces it.
+A predictor is a function: given an hour, return the predicted views for the next hour for each page. Computing and Physics write these.
+backtest.py scores any predictor and writes demo.json for the frontend. Computing owns it.
+Roles
 
-## How it works
+2nd year Computing: the models and the backtest (the spine)
 
-| Stage | File | What it does |
-|---|---|---|
-| Load | `load_data.py` | Normalises Kaggle/HF columns, cleans prices, builds a daily panel; gaps ≤ 3 days forward-filled, `observed` flags real data |
-| Features | `features.py` | **Infers promotions** (no promo flag in the data): price ≥ 5% below a trailing 42-day reference. ~20 leak-free features + labels |
-| Match | `matching.py` | Fuzzy-matches staples to products at each chain; compares on unit price where units line up |
-| Baseline | `model_xgb.py` | Multi-output XGBoost for the 14-day price path + classifier for "≥5% cheaper within 14 days"; walk-forward refits |
-| Transformer | `model_transformer.py` | Shared encoder over 56-day price sequences + retailer/category embeddings; same outputs and metrics |
-| Decide | `optimise.py` | MILP (SciPy/HiGHS): item × store × day, visit costs, need-by days, impatience cost |
-| Test | `backtest.py` | Random shoppers on held-out dates; policies scored on real prices that followed |
-| Demo | `recommend.py` | JSON for the frontend |
-| Insight | `analysis.py` | Lead-lag: do Tesco/Sainsbury's follow Aldi's price moves (Aldi Price Match)? |
+First, the backtest harness, before any ML. It takes predictors and cache sizes (e.g. 1k, 10k, 100k articles) and outputs hit rate per hour plus spike catch time.
+Baselines:
+last hour’s top pages (roughly “least recently used”, the standard rule);
+top pages over the last 24 hours (roughly “least frequently used”);
+same hour yesterday.
+XGBoost on per-page features: views 1–6 and 24 hours ago, growth rate, mobile share, hour of day, weekday. Keep it to a candidate set: pages with meaningful views in the last day.
+Overnight: a transformer over each page’s last 48 hourly views predicts the next 1–6 hours. Train it on Colab.
 
-### Honesty built in (say this in the pitch)
-- **Naive baseline.** Prices are sticky, so "price stays the same" is hard to beat. Every forecast is reported as skill vs that.
-- **Purging.** Labels look 14 days ahead, so training data stops 14 days before each test block.
-- **Calibration table.** When the model says 30%, does it happen 30% of the time?
-- **Oracle gap.** The backtest reports the *most* timing could ever add (perfect foresight vs best-of-today). That's the ceiling; we report what share of it each model captures. This directly answers "do prices change enough to matter?" with a number.
-- **Policies:** home store (status quo), compare_today (what a comparison site does), our model, oracle.
+2nd year Physics: the physics of attention
 
-### Known limitations
-- Promotions are inferred; a permanent price cut looks like a promo until the 42-day window catches up.
-- No Clubcard/Nectar prices or multibuys in the data, so loyalty deals are invisible.
-- No store locations: "near you" is the set of chains you enter, with your own travel cost per trip.
-- Transformer is trained once before the test period; XGBoost refits monthly (stricter on the transformer; use `--refit-every 100000` on XGBoost for a like-for-like comparison).
+Spike decay model: after a page spikes, attention fades, often roughly like a power law or exponential. Fit the decay to past spikes and use it to forecast how long a viral page stays hot. It’s a parametric predictor that plugs into the same backtest, and a strong feature for XGBoost.
+The cache as an optimisation: capacity is limited and swapping pages in costs bandwidth. So choose cache contents to maximise expected hits minus a switching cost. A greedy rule or dynamic programming, against the naive “just take the top N”.
+Statistics: confidence intervals on the hit-rate differences (bootstrap over hours), so the claims hold up.
 
-### If timing turns out small on real data
-That's a real finding, not a failure. Two strong extensions:
-1. **Stock up:** buy several units of non-perishables when a deep promo is on. That's an inventory problem under price uncertainty, and where promo prediction is worth most.
-2. **Promo-ending alerts:** "this is on promo and likely ends within 3 days: buy now."
+2nd year EIE: data engineering
 
-## Team plan (tonight)
+Now: write a downloader that streams the hourly pageview files and keeps only English desktop (en) and mobile (en.m). Never store the raw files.
+Get 2 days into views.parquet by about 02:30, so everyone can develop on real data. Then leave it running overnight to reach 7–10 days. Ten days gives “same hour last week” features.
+Data checks: missing hours, odd spikes that look like bots (pages viewed at robotic constant rates). If time allows, Computing’s isolation-forest experience can flag these.
+Morning: a small FastAPI backend that serves the replay data to the demo.
 
-| Who | First job | Then |
-|---|---|---|
-| ML lead | Run loader + features on real data, check promo summary | XGBoost, then transformer on GPU |
-| Physics | Read `optimise.py` + `backtest.py`; pick realistic travel costs and need-by days | Stock-up extension; confidence intervals in the pitch |
-| EIE | Data download and loading on the real files; fix any column issues | Wrap `recommend.py` in a small FastAPI endpoint |
-| Computing (1st yr) | Hand-check `match_candidates.csv` for all ~30 staples | Lead-lag analysis + charts |
-| Design eng | Build UI against `recommend.py` JSON (list in → plan out, price path chart per item) | Pitch deck: problem, model, backtest chart, lead-lag slide |
+2nd year Design Eng: the demo and the story
 
-**Order:** real data loaded + promo summary by ~22:00 → matches checked + XGBoost backtest by ~01:00 → transformer overnight → UI wired up by late morning → freeze code 2h before judging.
+The demo: replay a day of Wikipedia’s attention.
+A live leaderboard of the most-read pages.
+Each one marked green if your cache had it in time, red if it missed.
+A side-by-side hit-rate counter: your model vs the standard rule.
+The spike story: with EIE, find 2–3 dramatic real events in the data. For each, show its views curve with markers for when each method cached it.
+Pitch deck and narrative: problem (one sentence), the question, the headline numbers, the spike story, the “what is foresight worth?” curve, honest limits.
+Build against fake demo.json tonight, so you aren’t blocked waiting for real results.
+Timeline (assumes judging around 14:00; adjust to the real deadline)
+Time	Computing	Physics	EIE	Design Eng
+01:00–01:30	All: agree interfaces, metric, cache sizes			
+01:30–03:00	Backtest harness + baselines on fake data	Read up on attention decay; write the fitting code	Downloader; first 2 days of data	Demo wireframe, fake JSON
+03:00–06:00	XGBoost on real data	Fit decay model to real spikes	Full download running; data checks	Demo built against fake data
+06:00–09:00	Sleep in shifts (2–3 hours each). Transformer trains on Colab	Sleep, then the switching-cost optimisation	Sleep, then the replay API	Sleep, then find showcase spikes
+09:00–12:00	Final results: hit-rate curves, foresight curve	Confidence intervals; plug decay model into the backtest	Wire real data into the demo	Deck; real numbers in
+12:00–judging	All: freeze code, rehearse the 3-minute pitch three times			
+Honest limits to put in the pitch
+Pages that go from nothing to a million views within one hour can’t be predicted from hourly data. Everyone catches them an hour late. Showing exactly where that limit is will impress the judges more than hiding it.
+Hourly decisions simplify real caches, which decide per request.
+Article sizes aren’t in this data, so every page counts as the same size.
+Stretch goal: Wikimedia has also released anonymised request traces from its caching servers for research. If you find them on Wikitech, they’d let you test per request.
+
+Want me to build the starter repo now: the streaming downloader, the backtest harness, the three baselines and a fake demo.json? That would unblock all four of you within the hour.
+
+Sources:
+
+Wikimedia pageviews readme
+Phabricator: Wikimedia caching trace release (T225538)
